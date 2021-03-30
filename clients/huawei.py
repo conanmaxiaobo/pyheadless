@@ -11,22 +11,30 @@ class HuaWei(BaseHuaWei):
         super().__init__()
 
     async def handler(self, **kwargs):
+        self.cancel = False
+
         self.logger.info(f'{self.username} start login.')
-        await self.page.waitForSelector('#personalAccountInputId .tiny-input-text', {'visible': True})
         if kwargs.get('iam'):
             await self.iam_login(self.username, self.password, kwargs.get('parent'))
         else:
             await self.login(self.username, self.password)
 
-        utc_dt = datetime.utcnow().replace(tzinfo=timezone.utc)
-        h = int(utc_dt.astimezone(timezone(timedelta(hours=8))).strftime('%H'))
-
-        await self.check_project()
+        url = self.page.url
+        if 'login' in url:
+            self.logger.error(f'{self.username} login fail.')
+            return None
 
         await self.sign_task()
-        await self.start()
 
-        if h >= 12:
+        utc_dt = datetime.utcnow().replace(tzinfo=timezone.utc)
+        h = int(utc_dt.astimezone(timezone(timedelta(hours=8))).strftime('%H'))
+        self.logger.info(f'now hours: {h}')
+
+        if h <= 12:
+            await self.check_project()
+            await self.start()
+
+        if h > 12:
             await self.delete_project()
             await self.delete_function()
             await self.delete_api()
@@ -37,25 +45,37 @@ class HuaWei(BaseHuaWei):
         return await self.get_credit()
 
     async def login(self, username, password):
-        await self.page.type('#personalAccountInputId .tiny-input-text', username)
+        await self.page.waitForSelector('.hwid-input.hwid-cover-input.userAccount')
+        await asyncio.sleep(2)
+        await self.page.type('.hwid-input.hwid-cover-input.userAccount', username, {'delay': 10})
         await asyncio.sleep(0.5)
-        await self.page.type('#personalPasswordInputId .tiny-input-text', password)
-        await self.page.click('#btn_submit')
+        await self.page.type('.hwid-input-pwd', password, {'delay': 10})
+        await self.page.click('.normalBtn')
         await asyncio.sleep(5)
+        items = await self.page.querySelectorAll('.mutilAccountList .hwid-list-radio')
+        if len(items):
+            await items[1].click()
+            await asyncio.sleep(0.5)
+            await self.page.click('.hwid-mutilAccountMenu .normalBtn')
+            await asyncio.sleep(5)
 
     async def iam_login(self, username, password, parent):
-        await self.page.click('#subUserLogin')
-        await asyncio.sleep(1)
-
-        await self.page.waitForSelector('#IAMAccountInputId .tiny-input-text', {'visible': True})
-
         self.parent_user = os.environ.get('PARENT_USER', parent)
-        await self.page.type('#IAMAccountInputId .tiny-input-text', self.parent_user)
-        await self.page.type('#IAMUsernameInputId .tiny-input-text', username)
-        await asyncio.sleep(0.5)
-        await self.page.type('#IAMPasswordInputId .tiny-input-text', password)
-        await self.page.click('#loginBtn #btn_submit')
-        await asyncio.sleep(5)
+
+        try:
+            await self.page.waitForSelector('#IAMLinkDiv')
+            await asyncio.sleep(5)
+            await self.page.click('#IAMLinkDiv')
+            await asyncio.sleep(1)
+            await self.page.type('#IAMAccountInputId', self.parent_user, {'delay': 10})
+            await asyncio.sleep(0.5)
+            await self.page.type('#IAMUsernameInputId', username, {'delay': 10})
+            await asyncio.sleep(0.5)
+            await self.page.type('#IAMPasswordInputId', password, {'delay': 10})
+            await self.page.click('#loginBtn')
+            await asyncio.sleep(5)
+        except Exception as e:
+            self.logger.exception(e)
 
     async def get_cookies(self):
         cookies = await self.page.cookies()
